@@ -1,0 +1,134 @@
+name: "DG Tracker"
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "*/15 * * * 1-5"
+
+jobs:
+  run:
+    runs-on: "ubuntu-latest"
+
+    steps:
+      - name: "GitHub: Checkout Repository"
+        uses: "actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683" # v4.2.2
+
+      - name: "GitHub: Create GitHub App Token"
+        id: "github-app-token"
+        uses: "actions/create-github-app-token@3ff1caaa28b64c9cc276ce0a02e2ff584f3900c5" # v2.0.2
+        with:
+          app-id: "${{ secrets.SECRETS_MANAGER_GITHUB_APP_ID }}"
+          private-key: "${{ secrets.SECRETS_MANAGER_GITHUB_APP_PRIVATE_KEY }}"
+
+      - name: "Ubuntu: Install Dependencies"
+        shell: "bash"
+        run: |
+          sudo apt-get install \
+            --yes \
+            --no-install-recommends \
+            jq
+
+      - name: "Golang: Setup Go"
+        uses: "actions/setup-go@0aaccfd150d50ccaeb58ebd88d36e91967a5f35b" # v5.4.0
+        with:
+          go-version: "1.23.0"
+
+      - name: "Golang: Install Dependencies"
+        shell: "bash"
+        run: |
+          go install github.com/ericchiang/pup@fb09a23cce6c8ed60ba9b85035e3e27adff96aa3
+
+      - name: "DG Tracker: Extract Current Price Details"
+        shell: "bash"
+        run: |
+          urls=(
+            "${{ secrets.G_URL }}"
+            "${{ secrets.S_URL }}"
+          )
+
+          current_product_details="[]"
+
+          for url in "${urls[@]}"; do
+            ld_json=$(curl -sSL "$url"  | pup 'script[type="application/ld+json"] text{}')
+
+            product_name=$(echo "$ld_json" | jq -r '.name')
+            product_price=$(echo "$ld_json" | jq -r '.offers.price')
+            product_url=$(echo "$ld_json" | jq -r '.offers.url')
+            product_availability=$(echo "$ld_json" | jq -r '.offers.availability')
+
+            current_product_details=$(echo "$current_product_details" | jq ". += [{ \"name\": \"$product_name\", \"price\": \"$product_price\", \"url\": \"$product_url\", \"availability\": \"$product_availability\" }]")
+          done
+
+          echo "$current_product_details" > current_product_details.json
+
+      - name: "DG Tracker: Extract Previous Optimal Product Details"
+        shell: "bash"
+        run: |
+          PREVIOUS_OPTIMAL_PRODUCT_DETAILS="${{ secrets.PREVIOUS_OPTIMAL_PRODUCT_DETAILS }}"
+        
+          if [ -n "$PREVIOUS_OPTIMAL_PRODUCT_DETAILS" ]; then
+            echo "$PREVIOUS_OPTIMAL_PRODUCT_DETAILS" | base64 -d > previous_optimal_product_details.json
+          else
+            cp current_product_details.json previous_optimal_product_details.json
+          fi
+          
+      - name: "DG Tracker: Check Product Details Differences"
+        shell: "bash"
+        run: |
+          current_product_details=$(cat current_product_details.json)
+          previous_optimal_product_details=$(cat previous_optimal_product_details.json)
+
+          current_optimal_product_details="[]"
+          current_product_details_length=$(jq length <<< "$current_product_details")
+          for i in $(seq 0 $((current_product_details_length - 1))); do
+            current_name=$(jq -r ".[$i].name" <<< "$current_product_details")
+            current_price=$(jq -r ".[$i].price" <<< "$current_product_details")
+            current_url=$(jq -r ".[$i].url" <<< "$current_product_details")
+            current_availability=$(jq -r ".[$i].availability" <<< "$current_product_details")
+
+            previous_optimal_price=$(jq -r ".[$i].price" <<< "$previous_optimal_product_details")
+
+            # Check if current price is lower than previous optimal price
+            if (( $(echo "$current_price < $previous_optimal_price" | bc -l) )); then
+              TELEGRAM_MESSAGE="Preisminimum festgestellt:
+
+              ⦁ Produkt: $current_name
+              ⦁ Preis: $current_price EUR (zzgl. MwSt.)
+              ⦁ Verfügbarkeit: $current_availability
+              ⦁ Link: $current_url"
+
+              TELEGRAM_MESSAGE=$(echo "$TELEGRAM_MESSAGE" | sed --expression 's/^[[:space:]]*//g')
+              
+              curl -s -X POST "https://api.telegram.org/bot${{ secrets.TELEGRAM_BOT_TOKEN }}/sendMessage" \
+                --data "chat_id=${{ secrets.TELEGRAM_CHAT_ID }}" \
+                --data "text=$TELEGRAM_MESSAGE" \
+                --data "parse_mode=Markdown"
+              
+              current_optimal_product_details=$(echo "$current_optimal_product_details" | jq ". += [{ \"name\": \"$current_name\", \"price\": \"$current_price\", \"url\": \"$current_url\", \"availability\": \"$current_availability\" }]")
+            else
+              TELEGRAM_MESSAGE="Kein Preisminimum festgestellt:
+
+              ⦁ Produkt: $current_name
+              ⦁ Preis: $current_price EUR (zzgl. MwSt.)
+              ⦁ Verfügbarkeit: $current_availability
+              ⦁ Link: $current_url"
+
+              TELEGRAM_MESSAGE=$(echo "$TELEGRAM_MESSAGE" | sed --expression 's/^[[:space:]]*//g')
+              
+              curl -s -X POST "https://api.telegram.org/bot${{ secrets.TELEGRAM_BOT_TOKEN }}/sendMessage" \
+                --data "chat_id=${{ secrets.TELEGRAM_CHAT_ID }}" \
+                --data "text=$TELEGRAM_MESSAGE" \
+                --data "parse_mode=Markdown"
+            
+              current_optimal_product_details=$(echo "$current_optimal_product_details" | jq ". += [{ \"name\": \"$current_name\", \"price\": \"$previous_optimal_price\", \"url\": \"$current_url\", \"availability\": \"$current_availability\" }]")
+            fi
+          done
+
+          echo "$current_optimal_product_details" > current_optimal_product_details.json
+
+      - name: "GitHub: Persist Current Optimal Product Details"
+        shell: "bash"
+        run: |
+          gh secret set PREVIOUS_OPTIMAL_PRODUCT_DETAILS --body $(cat current_optimal_product_details.json | base64 --wrap 0)
+        env:
+          GH_TOKEN: "${{ steps.github-app-token.outputs.token }}"
