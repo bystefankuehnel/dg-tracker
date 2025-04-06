@@ -1,5 +1,7 @@
 # DG-Tracker
 
+[![DG Tracker](https://github.com/bystefankuehnel/dg-tracker/actions/workflows/dg-tracker.yml/badge.svg)](https://github.com/bystefankuehnel/dg-tracker/actions/workflows/dg-tracker.yml)
+
 This is an internal project, therefore no documentation is provided.
 
 # License
