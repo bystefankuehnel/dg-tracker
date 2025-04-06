@@ -105,21 +105,7 @@ jobs:
                 --data "parse_mode=Markdown"
               
               current_optimal_product_details=$(echo "$current_optimal_product_details" | jq ". += [{ \"name\": \"$current_name\", \"price\": \"$current_price\", \"url\": \"$current_url\", \"availability\": \"$current_availability\" }]")
-            else
-              TELEGRAM_MESSAGE="Kein Preisminimum festgestellt:
-
-              ⦁ Produkt: $current_name
-              ⦁ Preis: $current_price EUR (zzgl. MwSt.)
-              ⦁ Verfügbarkeit: $current_availability
-              ⦁ Link: $current_url"
-
-              TELEGRAM_MESSAGE=$(echo "$TELEGRAM_MESSAGE" | sed --expression 's/^[[:space:]]*//g')
-              
-              curl -s -X POST "https://api.telegram.org/bot${{ secrets.TELEGRAM_BOT_TOKEN }}/sendMessage" \
-                --data "chat_id=${{ secrets.TELEGRAM_CHAT_ID }}" \
-                --data "text=$TELEGRAM_MESSAGE" \
-                --data "parse_mode=Markdown"
-            
+            else            
               current_optimal_product_details=$(echo "$current_optimal_product_details" | jq ". += [{ \"name\": \"$current_name\", \"price\": \"$previous_optimal_price\", \"url\": \"$current_url\", \"availability\": \"$current_availability\" }]")
             fi
           done
